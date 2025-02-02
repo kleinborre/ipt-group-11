@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     # Instructed apps to be installed
     'rest_framework',
     'posts',
+    'django_extensions', # CAMU Activity 9 # run server using this code: python manage.py runserver_plus --cert-file cert.pem --key-file key.pem
 
     # Added apps for testing
     'auditlog',
@@ -128,3 +129,15 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+
+# List of added commands
+
+# Force HTTPS Redirect
+SECURE_SSL_REDIRECT = True  
+SESSION_COOKIE_SECURE = True  
+CSRF_COOKIE_SECURE = True  
+SECURE_HSTS_SECONDS = 31536000  # 1 year  
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True  
+SECURE_HSTS_PRELOAD = True  
