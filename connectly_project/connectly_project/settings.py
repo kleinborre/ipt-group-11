@@ -38,9 +38,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Added apps in order
+    # Instructed apps to be installed
     'rest_framework',
     'posts',
+
+    # Added apps for testing
+    'auditlog',
 ]
 
 MIDDLEWARE = [
