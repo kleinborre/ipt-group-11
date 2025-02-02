@@ -41,10 +41,11 @@ INSTALLED_APPS = [
     # Instructed apps to be installed
     'rest_framework',
     'posts',
-    'django_extensions', # CAMU Activity 9 # run server using this code: python manage.py runserver_plus --cert-file cert.pem --key-file key.pem
+    'sslserver',
 
     # Added apps for testing
     'auditlog',
+    'django_extensions', # CAMU Activity 9 # run server using this code: python manage.py runserver_plus --cert-file cert.pem --key-file key.pem
 ]
 
 MIDDLEWARE = [
