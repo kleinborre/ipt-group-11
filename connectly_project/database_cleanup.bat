@@ -1,4 +1,6 @@
 @echo off
+cd connectly_project
+
 :: Deletes specific migration files, resets database, and runs Django migration commands.
 
 REM Delete Python migration files except __init__.py
@@ -20,7 +22,7 @@ REM Reset auto-increment ID sequences
 python manage.py shell -c "from django.db import connection; cursor = connection.cursor(); cursor.execute('''DELETE FROM sqlite_sequence WHERE name IN (SELECT name FROM sqlite_master WHERE type='table');''')"
 
 REM Create a Django superuser
-python manage.py shell -c "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'adminpass')"
+python manage.py shell -c "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'admin@connectly.com', 'mmdc2025')"
 
 echo Cleanup, ID reset, and migration completed.
 pause

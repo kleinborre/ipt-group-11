@@ -1,9 +1,11 @@
 from django.urls import path
-from . import views
+from .views import UserListCreate, PostListCreate, CommentListCreate, UserRetrieveUpdateDestroy, PostRetrieveUpdateDestroy, CommentRetrieveUpdateDestroy
 
 urlpatterns = [
-    path('users/', views.get_users, name='get_users'),
-    path('users/create/', views.create_user, name='create_user'),
-    path('users/update/<int:id>/', views.update_user, name='update_user'),
-    path('users/delete/<int:id>/', views.delete_user, name='delete_user'),
+    path('users/', UserListCreate.as_view(), name='user-list-create'),
+    path('users/<int:pk>/', UserRetrieveUpdateDestroy.as_view(), name='user-retrieve-update-destroy'),
+    path('posts/', PostListCreate.as_view(), name='post-list-create'),
+    path('posts/<int:pk>/', PostRetrieveUpdateDestroy.as_view(), name='post-retrieve-update-destroy'),
+    path('comments/', CommentListCreate.as_view(), name='comment-list-create'),
+    path('comments/<int:pk>/', CommentRetrieveUpdateDestroy.as_view(), name='comment-retrieve-update-destroy'),
 ]
