@@ -1,11 +1,50 @@
 from rest_framework import serializers
 from .models import Post, Comment
 from django.contrib.auth.models import User
+import bcrypt
+from argon2 import PasswordHasher
+# from django.contrib.auth.hashers import make_password  # This import is optional, we'll use argon2 instead
 
 class UserSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True)  # Add password field for input
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email']
+        fields = ['id', 'username', 'email', 'password']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')  # Get the password from validated data
+        
+        # Salt with bcrypt
+        salt = bcrypt.gensalt()
+        salted_password = bcrypt.hashpw(password.encode('utf-8'), salt)
+        
+        # Hash with Argon2
+        ph = PasswordHasher()
+        hashed_password = ph.hash(salted_password.decode('utf-8'))
+        
+        # Create the user object and save the hashed password
+        user = User.objects.create(**validated_data)
+        user.password = hashed_password
+        user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)  # Check if password is provided for update
+        if password:
+            # Salt with bcrypt
+            salt = bcrypt.gensalt()
+            salted_password = bcrypt.hashpw(password.encode('utf-8'), salt)
+            
+            # Hash with Argon2
+            ph = PasswordHasher()
+            hashed_password = ph.hash(salted_password.decode('utf-8'))
+            
+            instance.password = hashed_password
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 class PostSerializer(serializers.ModelSerializer):
     comments = serializers.StringRelatedField(many=True, read_only=True)

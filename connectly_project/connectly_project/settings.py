@@ -141,4 +141,12 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True  
 SECURE_HSTS_SECONDS = 31536000  # 1 year  
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True  
-SECURE_HSTS_PRELOAD = True  
+SECURE_HSTS_PRELOAD = True
+
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher', # Argon2 for Hashing
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',  # BCrypt for Salting
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.BCryptPasswordHasher',
+]
