@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -23,4 +24,9 @@ urlpatterns = [
     # Added url patterns
     path('api-auth/', include('rest_framework.urls')), # DRF login and logout urls # For testing: http://127.0.0.1:8000/api-auth/login/
     path('posts/', include('posts.urls')),
+
+    # JWT Authentication Endpoints
+    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+
 ]

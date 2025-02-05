@@ -6,24 +6,18 @@ from argon2 import PasswordHasher
 # from django.contrib.auth.hashers import make_password  # This import is optional, we'll use argon2 instead
 
 class UserSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)  # Add password field for input
+    password = serializers.CharField(write_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password']
+        fields = ['id', 'username', 'email', 'password', 'is_staff']
 
     def create(self, validated_data):
-        password = validated_data.pop('password')  # Get the password from validated data
-        
-        # Salt with bcrypt
+        password = validated_data.pop('password')
         salt = bcrypt.gensalt()
-        salted_password = bcrypt.hashpw(password.encode('utf-8'), salt)
-        
-        # Hash with Argon2
+        salted_password = bcrypt.hashpw(password.encode(), salt)
         ph = PasswordHasher()
-        hashed_password = ph.hash(salted_password.decode('utf-8'))
-        
-        # Create the user object and save the hashed password
+        hashed_password = ph.hash(salted_password.decode())
         user = User.objects.create(**validated_data)
         user.password = hashed_password
         user.save()

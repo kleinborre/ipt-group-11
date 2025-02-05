@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     # Added apps for testing
     'auditlog',
     'django_extensions', # CAMU Activity 9 # run server using this code: python manage.py runserver_plus --cert-file cert.pem --key-file key.pem
+    'rest_framework.authtoken',
 ]
 
 MIDDLEWARE = [
@@ -150,3 +151,12 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
     'django.contrib.auth.hashers.BCryptPasswordHasher',
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',  # Secure all endpoints
+    )
+}
