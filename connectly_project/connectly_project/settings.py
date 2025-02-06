@@ -10,7 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
-from datetime import timedelta # Optional: For Logout
+from datetime import timedelta
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -48,6 +48,9 @@ INSTALLED_APPS = [
     'auditlog',
     'django_extensions', # CAMU Activity 9 # run server using this code: python manage.py runserver_plus --cert-file cert.pem --key-file key.pem
     'rest_framework.authtoken',
+
+    # Optional: For Logout
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 MIDDLEWARE = [
@@ -166,11 +169,11 @@ AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend',
 )
 
-# Optional: For Logout
+# Control Token Expiry
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Set token expiry duration
-    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=15),  # Set refresh token expiry duration
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Access token expiry
+    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=15),  # Refresh token expiry
     'ROTATE_REFRESH_TOKENS': True,  # Rotate refresh tokens
-    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist the old refresh token after a new one is issued
+    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist the old refresh token after rotation
 }
