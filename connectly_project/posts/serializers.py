@@ -3,7 +3,7 @@ from .models import Post, Comment
 from django.contrib.auth.models import User
 import bcrypt
 from argon2 import PasswordHasher
-# from django.contrib.auth.hashers import make_password  # This import is optional, we'll use argon2 instead
+from django.contrib.auth.hashers import make_password  # This import is optional, we'll use argon2 instead
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -13,15 +13,17 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'password', 'is_staff']
 
     def create(self, validated_data):
-        password = validated_data.pop('password')
-        salt = bcrypt.gensalt()
-        salted_password = bcrypt.hashpw(password.encode(), salt)
-        ph = PasswordHasher()
-        hashed_password = ph.hash(salted_password.decode())
-        user = User.objects.create(**validated_data)
-        user.password = hashed_password
-        user.save()
-        return user
+        validated_data['password'] = make_password(validated_data['password'])  # Use Django's built-in password hashing
+        return User.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        if password:
+            instance.password = make_password(password)  # Ensure correct hashing
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)  # Check if password is provided for update

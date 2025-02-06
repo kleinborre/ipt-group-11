@@ -1,68 +1,56 @@
-# views.py
-
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework import generics
-from django.contrib.auth.models import User  # Import User model here
+from rest_framework import generics, permissions
+from django.contrib.auth.models import User
 from .models import Post, Comment
 from .serializers import UserSerializer, PostSerializer, CommentSerializer
+from .permissions import IsOwnerOrAdmin, IsAdminOrReadOnly
+from rest_framework import serializers
 
-# User views
-class UserListCreate(APIView):
-    def get(self, request):
-        users = User.objects.all()
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()  # This will handle password salting and hashing
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+class UserListCreate(generics.ListCreateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAdminUser]  # Only admins can create users
 
 class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAdminUser]  # Only admins can update/delete users
 
+class PostListCreate(generics.ListCreateAPIView):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]  # Anyone can read, only authenticated users can post.
 
-# Post views
-class PostListCreate(APIView):
-    def get(self, request):
-        posts = Post.objects.all()
-        serializer = PostSerializer(posts, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = PostSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)  # Assign the logged-in user as the post author
 
 class PostRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
+    permission_classes = [IsOwnerOrAdmin]  # Users can edit/delete only their own posts, but admins can do everything
 
+class CommentListCreate(generics.ListCreateAPIView):
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]  # Anyone can read, only authenticated users can post.
 
-# Comment views
-class CommentListCreate(APIView):
-    def get(self, request):
-        comments = Comment.objects.all()
-        serializer = CommentSerializer(comments, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = CommentSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)  # Assign the logged-in user as the comment author
 
 class CommentRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
+    permission_classes = [IsOwnerOrAdmin]  # Users can edit/delete only their own comments, but admins can do everything
+
+class PostSerializer(serializers.ModelSerializer):
+    author = serializers.ReadOnlyField(source='author.username')  # Prevent users from changing the author
+
+    class Meta:
+        model = Post
+        fields = ['id', 'content', 'author', 'created_at', 'comments']
+
+class CommentSerializer(serializers.ModelSerializer):
+    author = serializers.ReadOnlyField(source='author.username')  # Prevent users from changing the author
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'text', 'author', 'post', 'created_at']

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+from datetime import timedelta # Optional: For Logout
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -146,7 +147,7 @@ SECURE_HSTS_PRELOAD = True
 
 PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.Argon2PasswordHasher', # Argon2 for Hashing
-    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',  # BCrypt for Salting
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',  # BCrypt for Salting # Removed this because of issues with Authentication
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
     'django.contrib.auth.hashers.BCryptPasswordHasher',
@@ -159,4 +160,17 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',  # Secure all endpoints
     )
+}
+
+AUTHENTICATION_BACKENDS = (
+    'django.contrib.auth.backends.ModelBackend',
+)
+
+# Optional: For Logout
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Set token expiry duration
+    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=15),  # Set refresh token expiry duration
+    'ROTATE_REFRESH_TOKENS': True,  # Rotate refresh tokens
+    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist the old refresh token after a new one is issued
 }
