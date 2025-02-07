@@ -18,7 +18,7 @@ class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
 class PostListCreate(generics.ListCreateAPIView):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]  # Anyone can read, only authenticated users can post.
+    permission_classes = [permissions.IsAuthenticated]  # Only authenticated users can view posts
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)  # Assign the logged-in user as the post author
@@ -26,12 +26,17 @@ class PostListCreate(generics.ListCreateAPIView):
 class PostRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
-    permission_classes = [IsOwnerOrAdmin]  # Users can edit/delete only their own posts, but admins can do everything
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrAdmin]  # Only owners or admin can update or delete
+
+    def perform_update(self, serializer):
+        if 'author' in serializer.validated_data:
+            del serializer.validated_data['author']  # Prevent users from changing the post's author field
+        super().perform_update(serializer)
 
 class CommentListCreate(generics.ListCreateAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]  # Anyone can read, only authenticated users can post.
+    permission_classes = [permissions.IsAuthenticated]  # Only authenticated users can view comments
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)  # Assign the logged-in user as the comment author
@@ -39,19 +44,9 @@ class CommentListCreate(generics.ListCreateAPIView):
 class CommentRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = [IsOwnerOrAdmin]  # Users can edit/delete only their own comments, but admins can do everything
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrAdmin]  # Only owners or admin can update or delete
 
-class PostSerializer(serializers.ModelSerializer):
-    author = serializers.ReadOnlyField(source='author.username')  # Prevent users from changing the author
-
-    class Meta:
-        model = Post
-        fields = ['id', 'content', 'author', 'created_at', 'comments']
-
-class CommentSerializer(serializers.ModelSerializer):
-    author = serializers.ReadOnlyField(source='author.username')  # Prevent users from changing the author
-
-    class Meta:
-        model = Comment
-        fields = ['id', 'text', 'author', 'post', 'created_at']
-
+    def perform_update(self, serializer):
+        if 'author' in serializer.validated_data:
+            del serializer.validated_data['author']  # Prevent users from changing the comment's author field
+        super().perform_update(serializer)

@@ -1,8 +1,6 @@
 from rest_framework import serializers
 from .models import Post, Comment
 from django.contrib.auth.models import User
-import bcrypt
-from argon2 import PasswordHasher
 from django.contrib.auth.hashers import make_password
 
 class UserSerializer(serializers.ModelSerializer):
@@ -25,14 +23,9 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-class PostSerializer(serializers.ModelSerializer):
-    comments = serializers.StringRelatedField(many=True, read_only=True)
-
-    class Meta:
-        model = Post
-        fields = ['id', 'content', 'author', 'created_at', 'comments']
-
 class CommentSerializer(serializers.ModelSerializer):
+    author = serializers.ReadOnlyField(source='author.username')  # Prevent author modification
+
     class Meta:
         model = Comment
         fields = ['id', 'text', 'author', 'post', 'created_at']
@@ -46,3 +39,11 @@ class CommentSerializer(serializers.ModelSerializer):
         if not User.objects.filter(id=value.id).exists():
             raise serializers.ValidationError("Author not found.")
         return value
+
+class PostSerializer(serializers.ModelSerializer):
+    comments = CommentSerializer(many=True, read_only=True)  # Display full comment details
+    author = serializers.ReadOnlyField(source='author.username')  # Prevent author modification
+
+    class Meta:
+        model = Post
+        fields = ['id', 'content', 'author', 'created_at', 'comments']

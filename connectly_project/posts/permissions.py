@@ -11,9 +11,12 @@ class IsAdminOrReadOnly(permissions.BasePermission):
 
 class IsOwnerOrAdmin(permissions.BasePermission):
     """
-    Users can only edit/delete their own posts/comments. Admins can do anything.
+    Custom permission to allow owners of an object or admins to edit or delete it.
     """
     def has_object_permission(self, request, view, obj):
-        if request.user.is_authenticated:
-            return request.user.is_staff or obj.author == request.user  # Users can only modify their own posts/comments
-        return False
+        # Allow safe methods (GET, OPTIONS, HEAD) for anyone
+        if request.method in permissions.SAFE_METHODS:
+            return True
+
+        # Allow the owner or an admin to perform the action
+        return obj.author == request.user or request.user.is_staff
