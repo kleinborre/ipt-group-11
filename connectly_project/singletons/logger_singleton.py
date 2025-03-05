@@ -11,10 +11,17 @@ class LoggerSingleton:
 
     def _initialize(self):
         self.logger = logging.getLogger("app_logger")
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
+
+        # File handler
+        file_handler = logging.FileHandler("app.log")  # Save logs to "app.log"
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+        # Console handler
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+        self.logger.addHandler(file_handler)  # Log to file
+        self.logger.addHandler(stream_handler)  # Log to console
         self.logger.setLevel(logging.INFO)
 
     def get_logger(self):

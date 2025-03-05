@@ -18,6 +18,14 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from django.conf import settings
+from django.conf.urls.static import static
+
+from django.urls import re_path
+from posts.private_media import ProtectedMediaView
+
+from posts.views import GoogleLogin, ConvertTokenView, UserFeedView, UserProfileView
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -29,4 +37,21 @@ urlpatterns = [
     # JWT Authentication Endpoints
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+
+    # For media access protection
+    re_path(r'^media/(?P<path>.*)$', ProtectedMediaView.as_view(), name='protected_media'),
+
+    # Google OAuth
+    path('auth/google/', GoogleLogin.as_view(), name='google_login'),
+    path('auth/convert-token/', ConvertTokenView.as_view(), name='convert_token'),
+
+    # Feed endpoint
+    path('feed/', UserFeedView.as_view(), name='user-feed'),
+
+    # Profile endpoint
+    path('profile/', UserProfileView.as_view(), name='user-profile'),
+
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

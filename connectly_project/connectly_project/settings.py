@@ -12,6 +12,11 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from datetime import timedelta
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -51,6 +56,18 @@ INSTALLED_APPS = [
 
     # Optional: For Logout
     'rest_framework_simplejwt.token_blacklist',
+
+    # Google OAuth
+    'social_django',
+    'dj_rest_auth',
+    'django.contrib.sites',  # Required for Django Allauth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
+
+    # Filters
+    'django_filters',
 ]
 
 MIDDLEWARE = [
@@ -61,7 +78,10 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
 ]
+
+MIDDLEWARE.insert(0, 'corsheaders.middleware.CorsMiddleware')
 
 ROOT_URLCONF = 'connectly_project.urls'
 
@@ -158,7 +178,9 @@ PASSWORD_HASHERS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework.authentication.SessionAuthentication',  # Enables login via API
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',  # Secure all endpoints
@@ -167,6 +189,7 @@ REST_FRAMEWORK = {
 
 AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend',
+    'social_core.backends.google.GoogleOAuth2',
 )
 
 # Control Token Expiry
@@ -175,5 +198,37 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Access token expiry
     'REFRESH_TOKEN_LIFETIME': timedelta(minutes=15),  # Refresh token expiry
     'ROTATE_REFRESH_TOKENS': True,  # Rotate refresh tokens
-    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist the old refresh token after rotation
+    'BLACKLIST_AFTER_ROTATION': False,  # Blacklist the old refresh token after rotation
+}
+
+# Media configuration
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+LOGIN_REDIRECT_URL = '/feed/'  # Redirect users to posts after login
+LOGOUT_REDIRECT_URL = '/'  # Redirect users back to login after logout
+
+# Google OAuth2 Configuration
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv("GOOGLE_CLIENT_ID")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = ['email', 'profile']
+SOCIAL_AUTH_GOOGLE_OAUTH2_EXTRA_DATA = ['first_name', 'last_name']
+
+# CSRF Settings
+CSRF_COOKIE_NAME = "csrftoken"
+CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:8000"]
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False  # Change to True in production
+
+# Simple JWT
+SIMPLE_JWT['AUTH_TOKEN_CLASSES'] = ("rest_framework_simplejwt.tokens.AccessToken",)
+
+SITE_ID = 1  # Required for Django Allauth
+
+# Google OAuth2 Configuration
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": ["email", "profile"],
+        "AUTH_PARAMS": {"access_type": "online"},
+    }
 }
