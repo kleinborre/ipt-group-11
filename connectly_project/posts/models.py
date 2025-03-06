@@ -81,3 +81,6 @@ auditlog.register(Post)
 auditlog.register(Comment)
 auditlog.register(Like)
 auditlog.register(Follow)
+
+User.add_to_class('profile_photo', models.URLField(blank=True, null=True))
+

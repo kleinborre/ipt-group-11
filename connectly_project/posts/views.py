@@ -2,7 +2,7 @@ from rest_framework import generics, permissions, status, serializers
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from .models import Post, Comment, Like, Follow
-from .serializers import UserSerializer, PostSerializer, CommentSerializer, LikeSerializer, FollowSerializer
+from .serializers import UserSerializer, PostSerializer, CommentSerializer, LikeSerializer, FollowSerializer, UploadPhotoSerializer
 from .permissions import IsOwnerOrAdmin, IsAdminOrReadOnly
 from factories.post_factory import PostFactory
 from factories.comment_factory import CommentFactory
@@ -22,26 +22,109 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 import requests
 
+# For Google Drive API
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from googleapiclient.http import MediaFileUpload
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework import status
+import os
+import json
+from datetime import datetime
+import tempfile
+
 # ------------------- PAGE NUMBER ----------------------
 class FeedPagination(PageNumberPagination):
     page_size = 2  # Number of items per page
-    # page_size_query_param = 'page_size'
+    page_size_query_param = 'page_size'
     max_page_size = 3  # Optional: Limit max results per page
 
 # -------------------- LOGGER --------------------------
 logger = LoggerSingleton().get_logger()
 
+# ------------------ GOOGLE DRIVE API -------------------------
+
+# Load Google Drive credentials
+GOOGLE_DRIVE_CREDENTIALS = "C:/Users/STUDY MODE/Desktop/apt-api-group11/service_account.json"
+GOOGLE_DRIVE_PARENT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_PARENT_FOLDER_ID")
+
+# Authenticate with Google Drive
+def authenticate_google_drive():
+    if not GOOGLE_DRIVE_CREDENTIALS:
+        raise Exception("Google Drive credentials not found")
+
+    # Load JSON from the file (this was the issue)
+    try:
+        with open(GOOGLE_DRIVE_CREDENTIALS, "r", encoding="utf-8") as f:
+            creds_dict = json.load(f)  # ✅ Correct way to load JSON from a file
+    except json.JSONDecodeError as e:
+        raise Exception(f"Error loading Google Drive credentials: {e}")
+
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive'])
+    return build('drive', 'v3', credentials=creds)
+
+# Upload file to Google Drive
+def upload_to_google_drive(file_obj, username):
+    drive_service = authenticate_google_drive()
+
+    # Get file extension
+    file_extension = file_obj.name.split('.')[-1]
+
+    # Generate a unique filename: username-profile-photo-YYYYMMDD-HHMMSS.ext
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    new_filename = f"{username}-profile-photo-{timestamp}.{file_extension}"
+
+    # Save in-memory file to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as temp_file:
+        for chunk in file_obj.chunks():
+            temp_file.write(chunk)
+        temp_file_path = temp_file.name
+
+    file_metadata = {
+        'name': new_filename,  # Set new filename
+        'parents': [GOOGLE_DRIVE_PARENT_FOLDER_ID]
+    }
+
+    media = MediaFileUpload(temp_file_path, mimetype=file_obj.content_type, resumable=True)
+    file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
+    ).execute()
+
+    return f"https://drive.google.com/file/d/{file['id']}/view"
+
 # ------------------- USER VIEWS -----------------------
-class UserListCreate(generics.ListCreateAPIView):
-    queryset = User.objects.all()
+class UserListCreate(generics.ListAPIView):
+    """
+    Lists users with profile photo, followers count, and following count.
+    """
     serializer_class = UserSerializer
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['id']
     search_fields = ['username', 'email']
     ordering_fields = ['id', 'username', 'email']
-    pagination_class = FeedPagination  # Apply pagination
+    pagination_class = FeedPagination
 
+    def get_queryset(self):
+        return User.objects.annotate(
+            followers_count=Count('followers'),
+            following_count=Count('following')
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        data = [{
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "profile_photo": user.profile_photo if hasattr(user, 'profile_photo') else None,
+            "followers_count": user.followers_count,
+            "following_count": user.following_count,
+        } for user in queryset]
+
+        return Response(data, status=status.HTTP_200_OK)
 
 class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
@@ -266,7 +349,6 @@ class ConvertTokenView(APIView):
 
 
 # -------------------- FOLLOW VIEWS --------------------
-
 class FollowUserView(generics.CreateAPIView):
     serializer_class = FollowSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -369,24 +451,47 @@ class UserFeedView(generics.ListAPIView):
             Prefetch('likes')
         )
 
-# -------------------- USER PROFILE VIEW --------------------
-class UserProfileView(generics.ListAPIView):
+# -------------------- PROFILE VIEW WITH UPLOAD --------------------
+class UserProfileView(generics.RetrieveAPIView):
     """
-    Get the logged-in user's profile with their posts and comments.
-    Includes filtering, searching, ordering, and pagination.
+    Retrieves logged-in user details, posts, and comments.
+    Does not allow creation or updates.
     """
-    serializer_class = PostSerializer  # Default to posts; switch based on request
     permission_classes = [permissions.IsAuthenticated]
-    pagination_class = FeedPagination  # Apply pagination
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['id']
-    search_fields = ['title', 'content', 'author__username']
-    ordering_fields = ['id', 'created_at', 'title', 'content']
 
-    def get_queryset(self):
-        user = self.request.user
-        content_type = self.request.GET.get("content", "posts")  # Default to posts
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        posts = Post.objects.filter(author=user).order_by('-created_at')
+        comments = Comment.objects.filter(author=user).order_by('-created_at')
 
-        if content_type == "comments":
-            return Comment.objects.filter(author=user).order_by('-created_at')
-        return Post.objects.filter(author=user).order_by('-created_at')
+        return Response({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "profile_photo": user.profile_photo if hasattr(user, 'profile_photo') else None,
+            "followers_count": user.followers.count(),
+            "following_count": user.following.count(),
+            "posts": PostSerializer(posts, many=True).data,
+            "comments": CommentSerializer(comments, many=True).data,
+        }, status=status.HTTP_200_OK)
+
+class UploadPhotoView(generics.CreateAPIView):
+    serializer_class = UploadPhotoSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            uploaded_photo = serializer.validated_data['photo']
+            
+            # Get new Google Drive URL
+            drive_url = upload_to_google_drive(uploaded_photo, request.user.username)
+
+            # ✅ Update the user's profile photo URL
+            request.user.profile_photo = drive_url
+            request.user.save()
+
+            return Response({"message": "Profile photo updated", "drive_url": drive_url}, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -14,6 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -232,3 +233,10 @@ SOCIALACCOUNT_PROVIDERS = {
         "AUTH_PARAMS": {"access_type": "online"},
     }
 }
+
+# Google Drive Directory Access
+GOOGLE_DRIVE_CREDENTIALS = "C:/Users/STUDY MODE/Desktop/apt-api-group11/service_account.json"
+GOOGLE_DRIVE_PARENT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_PARENT_FOLDER_ID")
+
+
+

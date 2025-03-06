@@ -24,7 +24,7 @@ from django.conf.urls.static import static
 from django.urls import re_path
 from posts.private_media import ProtectedMediaView
 
-from posts.views import GoogleLogin, ConvertTokenView, UserFeedView, UserProfileView
+from posts.views import GoogleLogin, ConvertTokenView, UserFeedView, UserProfileView, UploadPhotoView
 
 
 urlpatterns = [
@@ -50,6 +50,7 @@ urlpatterns = [
 
     # Profile endpoint
     path('profile/', UserProfileView.as_view(), name='user-profile'),
+    path('upload-photo/', UploadPhotoView.as_view(), name='upload-photo'),
 
 ]
 

@@ -6,10 +6,11 @@ from django.contrib.auth.hashers import make_password
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
+    profile_photo = serializers.CharField(source="profile.profile_photo", read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'is_staff']
+        fields = ['id', 'username', 'email', 'password', 'is_staff', 'profile_photo']
 
     def create(self, validated_data):
         validated_data['password'] = make_password(validated_data['password'])
@@ -23,6 +24,8 @@ class UserSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
+    def get_profile_photo(self, obj):
+        return obj.profile.profile_photo if hasattr(obj, 'profile') else None
 
 
 class CommentSerializer(serializers.ModelSerializer):
@@ -65,4 +68,7 @@ class FollowSerializer(serializers.ModelSerializer):
     class Meta:
         model = Follow
         fields = ['id', 'follower', 'following', 'created_at']
+
+class UploadPhotoSerializer(serializers.Serializer):
+    photo = serializers.ImageField()
 
