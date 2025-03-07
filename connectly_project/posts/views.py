@@ -32,6 +32,7 @@ import os
 import json
 from datetime import datetime
 import tempfile
+from django.contrib.auth.hashers import make_password
 
 # ------------------- PAGE NUMBER ----------------------
 class FeedPagination(PageNumberPagination):
@@ -95,7 +96,7 @@ def upload_to_google_drive(file_obj, username):
     return f"https://drive.google.com/file/d/{file['id']}/view"
 
 # ------------------- USER VIEWS -----------------------
-class UserListCreate(generics.ListAPIView):
+class UserListCreate(generics.ListCreateAPIView):
     """
     Lists users with profile photo, followers count, and following count.
     """
@@ -109,9 +110,9 @@ class UserListCreate(generics.ListAPIView):
 
     def get_queryset(self):
         return User.objects.annotate(
-            followers_count=Count('followers'),
-            following_count=Count('following')
-        )
+        followers_count=Count('followers', distinct=True),
+        following_count=Count('following', distinct=True)
+    ).order_by('id')  # Ensure proper order by ID
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -335,9 +336,12 @@ class ConvertTokenView(APIView):
         if not email:
             return Response({"error": "Unable to fetch email from Google"}, status=400)
 
-        # Get or create user
+        # Get or create user, assigning default password 'mmdc2025' if new
         user_model = get_user_model()
-        user, _ = user_model.objects.get_or_create(email=email, defaults={"username": email.split("@")[0]})
+        user, created = user_model.objects.get_or_create(
+            email=email, 
+            defaults={"username": email.split("@")[0], "password": make_password("mmdc2025")}
+        )
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
@@ -378,8 +382,8 @@ class UserFollowersView(generics.RetrieveAPIView):
 
     def get(self, request, *args, **kwargs):
         user = get_object_or_404(User, id=kwargs['user_id'])
-        followers_count = user.followers.count()
-        following_count = user.following.count()
+        followers_count = Follow.objects.filter(following=user).count()  # Count followers correctly
+        following_count = Follow.objects.filter(follower=user).count()  # Count following correctly
         
         return Response({
             "user": user.username,
@@ -403,8 +407,8 @@ class AllUsersFollowersView(generics.ListAPIView):
 
     def get_queryset(self):
         return User.objects.annotate(
-            followers_count=Count('followers'),
-            following_count=Count('following')
+            followers_count=Count('followers', distinct=True),
+            following_count=Count('following', distinct=True)
         )
 
     def list(self, request, *args, **kwargs):
@@ -488,7 +492,7 @@ class UploadPhotoView(generics.CreateAPIView):
             # Get new Google Drive URL
             drive_url = upload_to_google_drive(uploaded_photo, request.user.username)
 
-            # ✅ Update the user's profile photo URL
+            # Update the user's profile photo URL
             request.user.profile_photo = drive_url
             request.user.save()
 
