@@ -57,7 +57,7 @@ def authenticate_google_drive():
     # Load JSON from the file (this was the issue)
     try:
         with open(GOOGLE_DRIVE_CREDENTIALS, "r", encoding="utf-8") as f:
-            creds_dict = json.load(f)  # ✅ Correct way to load JSON from a file
+            creds_dict = json.load(f)
     except json.JSONDecodeError as e:
         raise Exception(f"Error loading Google Drive credentials: {e}")
 
@@ -96,9 +96,21 @@ def upload_to_google_drive(file_obj, username):
     return f"https://drive.google.com/file/d/{file['id']}/view"
 
 # ------------------- USER VIEWS -----------------------
-class UserListCreate(generics.ListCreateAPIView):
+class UserCreateView(generics.CreateAPIView):
+    """
+    Allows only admin users to create new users.
+    """
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAdminUser] 
+class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminOrReadOnly]
+
+class UserListView(generics.ListAPIView):
     """
     Lists users with profile photo, followers count, and following count.
+    Prevents non-admin users from creating new users.
     """
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -110,27 +122,9 @@ class UserListCreate(generics.ListCreateAPIView):
 
     def get_queryset(self):
         return User.objects.annotate(
-        followers_count=Count('followers', distinct=True),
-        following_count=Count('following', distinct=True)
-    ).order_by('id')  # Ensure proper order by ID
-
-    def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        data = [{
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "profile_photo": user.profile_photo if hasattr(user, 'profile_photo') else None,
-            "followers_count": user.followers_count,
-            "following_count": user.following_count,
-        } for user in queryset]
-
-        return Response(data, status=status.HTTP_200_OK)
-
-class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
-    permission_classes = [IsAdminOrReadOnly]
+            followers_count=Count('followers', distinct=True),
+            following_count=Count('following', distinct=True)
+        ).order_by('id')
 
 # -------------------- POST VIEWS --------------------
 class PostListCreate(generics.ListCreateAPIView):
@@ -382,8 +376,8 @@ class UserFollowersView(generics.RetrieveAPIView):
 
     def get(self, request, *args, **kwargs):
         user = get_object_or_404(User, id=kwargs['user_id'])
-        followers_count = Follow.objects.filter(following=user).count()  # Count followers correctly
-        following_count = Follow.objects.filter(follower=user).count()  # Count following correctly
+        followers_count = Follow.objects.filter(following=user).count()
+        following_count = Follow.objects.filter(follower=user).count()
         
         return Response({
             "user": user.username,
@@ -459,25 +453,45 @@ class UserFeedView(generics.ListAPIView):
 class UserProfileView(generics.RetrieveAPIView):
     """
     Retrieves logged-in user details, posts, and comments.
-    Does not allow creation or updates.
+    Ensures pagination applies automatically.
     """
+    serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FeedPagination
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    ordering_fields = ['title', 'content', 'created_at']
+
+    def get_queryset(self):
+        return User.objects.filter(id=self.request.user.id)
 
     def get(self, request, *args, **kwargs):
-        user = request.user
-        posts = Post.objects.filter(author=user).order_by('-created_at')
-        comments = Comment.objects.filter(author=user).order_by('-created_at')
+        user = self.get_queryset().first()
 
-        return Response({
+        if not user:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 🔹 Apply pagination to posts
+        posts = Post.objects.filter(author=user).order_by('-created_at')
+        paginated_posts = self.paginate_queryset(posts)
+
+        # 🔹 Apply pagination to comments
+        comments = Comment.objects.filter(author=user).order_by('-created_at')
+        paginated_comments = self.paginate_queryset(comments)
+
+        # 🔹 Generate paginated response
+        response_data = {
             "id": user.id,
             "username": user.username,
             "email": user.email,
             "profile_photo": user.profile_photo if hasattr(user, 'profile_photo') else None,
             "followers_count": user.followers.count(),
             "following_count": user.following.count(),
-            "posts": PostSerializer(posts, many=True).data,
-            "comments": CommentSerializer(comments, many=True).data,
-        }, status=status.HTTP_200_OK)
+            "posts": PostSerializer(paginated_posts, many=True).data,
+            "comments": CommentSerializer(paginated_comments, many=True).data,
+        }
+
+        return self.get_paginated_response(response_data)
+
 
 class UploadPhotoView(generics.CreateAPIView):
     serializer_class = UploadPhotoSerializer

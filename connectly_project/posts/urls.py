@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    UserListCreate, UserRetrieveUpdateDestroy,
+    UserListView, UserCreateView, UserRetrieveUpdateDestroy,
     PostListCreate, PostRetrieveUpdateDestroy, LikePostView,
     CommentListCreate, CommentRetrieveUpdateDestroy, LikeCommentView,
     UserPostCommentsList, UserPostCommentDetail, UserAllCommentsList,
@@ -10,7 +10,8 @@ from .views import (
 
 urlpatterns = [
     # -------------------- USER ENDPOINTS --------------------
-    path('users/', UserListCreate.as_view(), name='user-list-create'),
+    path('users/', UserListView.as_view(), name='user-list'),  # ✅ View-Only for Authenticated Users
+    path('users/create/', UserCreateView.as_view(), name='user-create'),  # ✅ Admin-Only for Creating Users
     path('users/<int:pk>/', UserRetrieveUpdateDestroy.as_view(), name='user-retrieve-update-destroy'),
 
     # -------------------- POST ENDPOINTS --------------------
