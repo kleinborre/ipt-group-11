@@ -34,7 +34,7 @@ from datetime import datetime
 import tempfile
 from django.contrib.auth.hashers import make_password
 
-# Caching
+# For Caching
 from django.core.cache import cache
 
 # ------------------- PAGE NUMBER ----------------------
