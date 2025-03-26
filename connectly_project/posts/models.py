@@ -9,6 +9,11 @@ class Post(models.Model):
         ('image', 'Image'),
         ('video', 'Video'),
     ]
+    
+    PRIVACY_CHOICES = [
+        ('public', 'Public'),
+        ('private', 'Private'),
+    ]
 
     title = models.CharField(max_length=255, default="Default Title")
     content = models.TextField()
@@ -18,6 +23,7 @@ class Post(models.Model):
     video = models.FileField(upload_to='posts/videos/', blank=True, null=True)
     author = models.ForeignKey(User, related_name='posts', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
+    privacy = models.CharField(max_length=10, choices=PRIVACY_CHOICES, default='public')
 
     def like_count(self):
         return self.likes.count()
@@ -27,7 +33,6 @@ class Post(models.Model):
 
     def __str__(self):
         return f"{self.title} by {self.author.username}"
-
 
 class Comment(models.Model):
     COMMENT_TYPES = [

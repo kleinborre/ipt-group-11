@@ -50,14 +50,14 @@ class PostSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Post
-        fields = ['id', 'title', 'content', 'post_type', 'metadata', 'image', 'video', 'author', 'created_at', 'comments', 'like_count', 'comment_count']
+        fields = ['id', 'title', 'content', 'post_type', 'metadata', 'image', 'video',
+                  'author', 'created_at', 'comments', 'like_count', 'comment_count', 'privacy']
 
     def get_like_count(self, obj):
         return obj.like_count()
 
     def get_comment_count(self, obj):
         return obj.comment_count()
-
 
 class LikeSerializer(serializers.ModelSerializer):
     class Meta:

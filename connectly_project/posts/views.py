@@ -34,6 +34,9 @@ from datetime import datetime
 import tempfile
 from django.contrib.auth.hashers import make_password
 
+# For Caching
+from django.core.cache import cache
+
 # ------------------- PAGE NUMBER ----------------------
 class FeedPagination(PageNumberPagination):
     page_size = 2  # Number of items per page
@@ -42,6 +45,9 @@ class FeedPagination(PageNumberPagination):
 
 # -------------------- LOGGER --------------------------
 logger = LoggerSingleton().get_logger()
+
+# ------------------- CACHING CONFIGURATION ----------------------
+CACHE_TIMEOUT = 300  # Cache timeout in seconds (5 minutes)
 
 # ------------------ GOOGLE DRIVE API -------------------------
 
@@ -103,15 +109,47 @@ class UserCreateView(generics.CreateAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAdminUser] 
 class UserRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a user.
+    Implements caching for performance optimization.
+    """
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAdminOrReadOnly]
 
+    def get_object(self):
+        user_id = self.kwargs["pk"]
+        cache_key = f"user_{user_id}"
+        cached_user = cache.get(cache_key)
+
+        if cached_user:
+            logger.info(f"Cache hit: Fetching user {user_id} from cache.")
+            return User.objects.get(id=user_id)  # Ensure it's a QuerySet object
+
+        logger.info(f"Cache miss: Fetching user {user_id} from database.")
+        user = get_object_or_404(User, id=user_id)
+        cache.set(cache_key, UserSerializer(user).data, CACHE_TIMEOUT)  # Serialize before caching
+        logger.info(f"Cache set: Cached user {user_id}.")
+        return user
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        serializer.save()
+
+        # Invalidate cache on update
+        cache.delete(f"user_{instance.id}")
+        cache.delete("users_list")
+        logger.info(f"Cache invalidated: User {instance.id} updated.")
+
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+
+        # Invalidate cache on delete
+        cache.delete(f"user_{instance.id}")
+        cache.delete("users_list")
+        logger.info(f"Cache invalidated: User {instance.id} deleted.")
+
 class UserListView(generics.ListAPIView):
-    """
-    Lists users with profile photo, followers count, and following count.
-    Prevents non-admin users from creating new users.
-    """
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -126,18 +164,70 @@ class UserListView(generics.ListAPIView):
             following_count=Count('following', distinct=True)
         ).order_by('id')
 
+    def list(self, request, *args, **kwargs):
+        cache_key = f"users_list_page_{request.query_params.get('page', 1)}"
+        cached_data = cache.get(cache_key)
+
+        if cached_data:
+            logger.info("Cache hit: Fetching paginated users list from cache.")
+            return Response(cached_data, status=status.HTTP_200_OK)
+
+        logger.info("Cache miss: Fetching users list from database.")
+        queryset = self.get_queryset()
+        paginated_queryset = self.paginate_queryset(queryset)
+
+        response = self.get_paginated_response(UserSerializer(paginated_queryset, many=True).data)
+
+        cache.set(cache_key, response.data, CACHE_TIMEOUT)
+        logger.info("Cache set: Cached paginated users list.")
+
+        return response
+
 # -------------------- POST VIEWS --------------------
 class PostListCreate(generics.ListCreateAPIView):
-    queryset = Post.objects.all()
+    queryset = Post.objects.select_related('author') \
+        .prefetch_related('comments__author', 'likes__user') \
+        .order_by('-created_at')
     serializer_class = PostSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FeedPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['id']
     search_fields = ['title', 'content', 'author__username']
     ordering_fields = ['id', 'created_at', 'title', 'content']
-    pagination_class = FeedPagination
+
+    def get_queryset(self):
+        """
+        Only show public posts OR private posts authored by current user.
+        """
+        user = self.request.user
+        return Post.objects.filter(
+            Q(privacy='public') | Q(author=user)
+        ).order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Caches paginated post list per user per page.
+        """
+        user_id = request.user.id
+        page_number = request.query_params.get("page", 1)
+        cache_key = f"posts_list_user_{user_id}_page_{page_number}"
+        cached_data = cache.get(cache_key)
+
+        if cached_data:
+            logger.info(f"Cache hit: Returning cached posts for user {user_id} page {page_number}.")
+            return Response(cached_data, status=status.HTTP_200_OK)
+
+        logger.info(f"Cache miss: Fetching posts for user {user_id} page {page_number}.")
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, CACHE_TIMEOUT)
+        logger.info(f"Cache set: posts_list_user_{user_id}_page_{page_number}")
+        return response
 
     def perform_create(self, serializer):
+        """
+        Creates a new post and clears cached lists.
+        """
         data = self.request.data
         try:
             post = PostFactory.create_post(
@@ -145,8 +235,10 @@ class PostListCreate(generics.ListCreateAPIView):
                 title=data['title'],
                 content=data.get('content', ''),
                 metadata=data.get('metadata', {}),
-                author=self.request.user
+                author=self.request.user,
+                privacy=data.get('privacy', 'public')
             )
+
             if 'image' in self.request.FILES:
                 post.image = self.request.FILES['image']
             if 'video' in self.request.FILES:
@@ -154,30 +246,98 @@ class PostListCreate(generics.ListCreateAPIView):
 
             post.save()
             serializer.instance = post
+
+            self.clear_all_post_page_caches()
+
+            # Also clear feed caches for all users
+            UserFeedView().clear_all_feed_page_caches()
+            
             logger.info(f"Post created: '{post.title}' by {self.request.user.username}")
+
         except ValueError as e:
             logger.error(f"Post creation failed: {str(e)}")
             raise serializers.ValidationError(str(e))
+
+    def clear_all_post_page_caches(self):
+        """
+        Clear cached post pages for all users (across all page numbers).
+        """
+        logger.info("Clearing cached post list pages for all users...")
+        for user in User.objects.all():
+            user_id = user.id
+            page = 1
+            while True:
+                cache_key = f"posts_list_user_{user_id}_page_{page}"
+                if cache.get(cache_key):
+                    cache.delete(cache_key)
+                    logger.info(f"Cache deleted: {cache_key}")
+                else:
+                    break
+                page += 1
 
 class PostRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
     queryset = Post.objects.all()
     serializer_class = PostSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrAdmin]
 
+    def get_object(self):
+        post_id = self.kwargs["pk"]
+        post = get_object_or_404(Post, id=post_id)
+
+        # Restrict view of private posts from others, including admin
+        if post.privacy == 'private' and post.author != self.request.user:
+            if self.request.method == 'GET':
+                raise serializers.ValidationError("You are not authorized to view this private post.")
+
+        self.check_object_permissions(self.request, post)
+        return post
+
     def perform_update(self, serializer):
-        if 'author' in serializer.validated_data:
-            del serializer.validated_data['author']
         instance = self.get_object()
-        super().perform_update(serializer)
-        logger.info(f"Post updated: '{instance.title}' by {self.request.user.username}")
+        serializer.save()
+
+        # Invalidate detail and list caches
+        cache.delete(f"post_{instance.id}")
+        self.clear_all_post_page_caches()
+
+        # Also clear feed caches for all users
+        UserFeedView().clear_all_feed_page_caches()
+
+        logger.info(f"Cache invalidated: Post {instance.id} updated.")
 
     def perform_destroy(self, instance):
-        logger.warning(f"Post deleted: '{instance.title}' by {self.request.user.username}")
-        super().perform_destroy(instance)
+        post_id = instance.id
+        instance.delete()
+
+        # Invalidate detail and list caches
+        cache.delete(f"post_{post_id}")
+        self.clear_all_post_page_caches()
+
+        # Also clear feed caches for all users
+        UserFeedView().clear_all_feed_page_caches()
+
+        logger.info(f"Cache invalidated: Post {post_id} deleted.")
+
+    def clear_all_post_page_caches(self):
+        logger.info("Clearing cached post list pages for all users...")
+        for user in User.objects.all():
+            user_id = user.id
+            page = 1
+            while True:
+                cache_key = f"posts_list_user_{user_id}_page_{page}"
+                if cache.get(cache_key):
+                    cache.delete(cache_key)
+                    logger.info(f"Cache deleted: {cache_key}")
+                else:
+                    break
+                page += 1
 
 # -------------------- COMMENT VIEWS --------------------
 class CommentListCreate(generics.ListCreateAPIView):
-    queryset = Comment.objects.all()
+    """
+    Lists all comments and allows authenticated users to create new comments.
+    Caching implemented to improve performance.
+    """
     serializer_class = CommentSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -186,9 +346,24 @@ class CommentListCreate(generics.ListCreateAPIView):
     ordering_fields = ['id', 'created_at', 'content']
     pagination_class = FeedPagination
 
+    def get_queryset(self):
+        cache_key = "comments_list"
+        cached_comments = cache.get(cache_key)
+
+        if cached_comments:
+            logger.info("Cache hit: Fetching comments from cache.")
+            return cached_comments
+
+        logger.info("Cache miss: Fetching comments from database.")
+        comments = Comment.objects.all().order_by('-created_at')
+        cache.set(cache_key, comments, CACHE_TIMEOUT)
+        logger.info("Cache set: Comments list cached.")
+        return comments
+
     def perform_create(self, serializer):
         data = self.request.POST
         files = self.request.FILES
+
         try:
             comment = CommentFactory.create_comment(
                 comment_type=data['comment_type'],
@@ -198,25 +373,96 @@ class CommentListCreate(generics.ListCreateAPIView):
                 post=Post.objects.get(id=data['post'])
             )
 
-            # Only assign files if they exist to avoid NoneType errors
-            if 'image' in files and files['image'] is not None:
+            if 'image' in files:
                 comment.image = files['image']
-            if 'video' in files and files['video'] is not None:
+            if 'video' in files:
                 comment.video = files['video']
 
-            comment.save()  # Save comment with attached files
+            comment.save()
             serializer.instance = comment
 
+            cache.delete("comments_list")
+            self.clear_related_post_cache(comment.post.id)
+
             logger.info(f"Comment created on Post ID {comment.post.id} by {self.request.user.username}")
+            logger.info(f"Cache invalidated: Related post caches cleared for Post ID {comment.post.id}.")
 
         except ValueError as e:
             logger.error(f"Comment creation failed: {str(e)}")
             raise serializers.ValidationError(str(e))
 
+    def clear_related_post_cache(self, post_id):
+        """
+        Clears individual post detail cache and paginated post list caches.
+        """
+        # Clear specific post detail view
+        post_cache_key = f"post_{post_id}"
+        cache.delete(post_cache_key)
+        logger.info(f"Cache deleted: {post_cache_key}")
+
+        # Clear paginated list view caches
+        page = 1
+        while True:
+            list_cache_key = f"posts_list_page_{page}"
+            if cache.get(list_cache_key):
+                cache.delete(list_cache_key)
+                logger.info(f"Cache deleted: {list_cache_key}")
+            else:
+                break
+            page += 1
+
+        
 class CommentRetrieveUpdateDestroy(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a comment.
+    Implements caching for performance optimization.
+    """
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrAdmin]
+
+    def get_object(self):
+        comment_id = self.kwargs["pk"]
+        return get_object_or_404(Comment, id=comment_id)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        serializer.save()
+        cache.delete(f"comment_{instance.id}")
+        cache.delete("comments_list")
+        self.clear_related_post_cache(instance.post.id)
+        logger.info(f"Comment {instance.id} updated. Cache invalidated.")
+
+    def perform_destroy(self, instance):
+        post_id = instance.post.id
+        instance.delete()
+
+        cache.delete(f"comment_{instance.id}")
+        cache.delete("comments_list")
+        logger.info(f"Comment {instance.id} deleted. Cache invalidated.")
+
+        self.clear_related_post_cache(post_id)
+
+    def clear_related_post_cache(self, post_id):
+        """
+        Clears post detail cache and all paginated post list caches.
+        """
+        logger.info(f"[Comment] Clearing cached post detail and list for post {post_id}...")
+
+        # Always delete the post detail cache
+        cache.delete(f"post_{post_id}")
+        logger.info(f"Cache deleted: post_{post_id}")
+
+        # Always delete all paginated post list pages (safer and cleaner)
+        page = 1
+        while True:
+            list_cache_key = f"posts_list_page_{page}"
+            if cache.get(list_cache_key):
+                cache.delete(list_cache_key)
+                logger.info(f"Cache deleted: {list_cache_key}")
+            else:
+                break
+            page += 1
 
 # -------------------- COMMENT TRACKING VIEWS --------------------
 class PostCommentDetail(generics.RetrieveAPIView):
@@ -263,20 +509,36 @@ class UserAllCommentsList(generics.ListAPIView):
 # -------------------- USER POST TRACKING --------------------
 class UserSpecificPost(generics.RetrieveAPIView):
     serializer_class = PostSerializer
-    lookup_field = "id"  # Explicitly set lookup field to "id"
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = "id"  # Still referencing by ID
 
     def get_object(self):
-        return get_object_or_404(
+        post = get_object_or_404(
             Post,
             author_id=self.kwargs["user_id"],
-            id=self.kwargs["post_id"]  # Ensure we use "id", not "post_id"
+            id=self.kwargs["post_id"]
         )
+
+        # Privacy check: only the author can view private posts
+        if post.privacy == 'private' and self.request.user != post.author:
+            raise serializers.ValidationError("You are not authorized to view this private post.")
+
+        return post
 
 class UserPostList(generics.ListAPIView):
     serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Post.objects.filter(author_id=self.kwargs['user_id'])
+        user_id = self.kwargs['user_id']
+        requesting_user = self.request.user
+
+        if requesting_user.id == int(user_id):
+            # Show all posts if the user is viewing their own posts
+            return Post.objects.filter(author_id=user_id)
+        else:
+            # Show only public posts if viewing someone else's posts
+            return Post.objects.filter(author_id=user_id, privacy='public')
 
 # -------------------- LIKE VIEWS --------------------
 class LikePostView(generics.CreateAPIView):
@@ -284,24 +546,68 @@ class LikePostView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        post = Post.objects.get(id=kwargs.get("pk"))
+        post_id = kwargs.get("pk")
+        post = get_object_or_404(Post, id=post_id)
         like, created = Like.objects.get_or_create(user=request.user, post=post)
+
+        # Invalidate cache for individual post
+        cache.delete(f"post_{post_id}")
+        # Invalidate all paginated post list caches
+        page = 1
+        while True:
+            cache_key = f"posts_list_page_{page}"
+            if cache.get(cache_key):
+                cache.delete(cache_key)
+                logger.info(f"Cache invalidated: {cache_key}")
+            else:
+                break
+            page += 1
+
         if not created:
             like.delete()
             return Response({"message": "Like removed"}, status=status.HTTP_200_OK)
+        
         return Response({"message": "Post liked"}, status=status.HTTP_201_CREATED)
-
+    
 class LikeCommentView(generics.CreateAPIView):
     serializer_class = LikeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        comment = Comment.objects.get(id=kwargs.get("pk"))
+        comment = get_object_or_404(Comment, id=kwargs.get("pk"))
+        post_id = comment.post.id  # Get related post ID
+
         like, created = Like.objects.get_or_create(user=request.user, comment=comment)
+        message = "Comment liked" if created else "Like removed"
+        
         if not created:
             like.delete()
-            return Response({"message": "Like removed"}, status=status.HTTP_200_OK)
-        return Response({"message": "Comment liked"}, status=status.HTTP_201_CREATED)
+
+        # Invalidate related post caches (for list + detail view)
+        self.clear_related_post_cache(post_id)
+
+        return Response({"message": message}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def clear_related_post_cache(self, post_id):
+        """
+        Clears the cache for the post detail and all post list pages.
+        """
+        logger.info(f"[LikeComment] Clearing cache for post ID {post_id}...")
+
+        # Clear the post detail cache
+        cache.delete(f"post_{post_id}")
+        logger.info(f"Cache deleted: post_{post_id}")
+
+        # Clear all post list pages (to reflect like_count on comments)
+        page = 1
+        while True:
+            cache_key = f"posts_list_page_{page}"
+            if cache.get(cache_key):
+                cache.delete(cache_key)
+                logger.info(f"Cache deleted: {cache_key}")
+            else:
+                break
+            page += 1
     
 
 # -------------------- GOOGLE OAUTH --------------------
@@ -351,18 +657,40 @@ class FollowUserView(generics.CreateAPIView):
     serializer_class = FollowSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def clear_feed_cache_for_user(self, user_id):
+        page = 1
+        while True:
+            cache_key = f"user_feed_page_{user_id}_{page}"
+            if cache.get(cache_key):
+                cache.delete(cache_key)
+                logger.info(f"Cleared feed cache: {cache_key}")
+            else:
+                break
+            page += 1
+
     def post(self, request, *args, **kwargs):
         following_user = get_object_or_404(User, id=kwargs['user_id'])
         if request.user == following_user:
             return Response({"error": "You cannot follow yourself"}, status=status.HTTP_400_BAD_REQUEST)
 
         follow, created = Follow.objects.get_or_create(follower=request.user, following=following_user)
+
         if not created:
             follow.delete()
-            return Response({"message": "Unfollowed user"}, status=status.HTTP_200_OK)
-        
-        return Response({"message": "Followed user"}, status=status.HTTP_201_CREATED)
+            message = "Unfollowed user"
+            response_status = status.HTTP_200_OK
+        else:
+            message = "Followed user"
+            response_status = status.HTTP_201_CREATED
 
+        cache.delete(f"user_followers_{following_user.id}")
+        cache.delete(f"user_profile_{following_user.id}")
+        cache.delete("all_users_followers")
+        logger.info("Cache invalidated: 'all_users_followers' after follow/unfollow.")
+
+        self.clear_feed_cache_for_user(request.user.id)
+
+        return Response({"message": message}, status=response_status)
 
 class UserFollowersView(generics.RetrieveAPIView):
     """
@@ -372,24 +700,38 @@ class UserFollowersView(generics.RetrieveAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering_fields = ['followers_count']
+    ordering_fields = ['followers_count', 'following_count']
 
     def get(self, request, *args, **kwargs):
-        user = get_object_or_404(User, id=kwargs['user_id'])
+        user_id = kwargs['user_id']
+        cache_key = f"user_followers_{user_id}"
+
+        # Check if followers count is cached
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return Response(cached_data)
+
+        # Fetch user and follower data
+        user = get_object_or_404(User, id=user_id)
         followers_count = Follow.objects.filter(following=user).count()
         following_count = Follow.objects.filter(follower=user).count()
-        
-        return Response({
+
+        response_data = {
             "user": user.username,
             "followers_count": followers_count,
             "following_count": following_count,
-        })
+        }
 
+        # Cache the data for performance improvement
+        cache.set(cache_key, response_data, timeout=300)  # Cache for 5 minutes
+
+        return Response(response_data)
 
 class AllUsersFollowersView(generics.ListAPIView):
     """
     Endpoint to retrieve all users along with their follower count.
     Allows filtering by username and ordering by followers_count.
+    Implements caching for optimized performance.
     """
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -406,26 +748,41 @@ class AllUsersFollowersView(generics.ListAPIView):
         )
 
     def list(self, request, *args, **kwargs):
+        cache_key = "all_users_followers"
+        cached_data = cache.get(cache_key)
+
+        if cached_data:
+            logger.info("Cache hit: Fetching all users' followers from cache.")
+            return Response(cached_data, status=status.HTTP_200_OK)
+
+        logger.info("Cache miss: Fetching all users' followers from database.")
         queryset = self.get_queryset()
-        data = []
+        paginated_queryset = self.paginate_queryset(queryset)
 
-        for user in queryset:
-            data.append({
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "followers_count": user.followers_count,
-                "following_count": user.following_count,
-            })
+        data = [{
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "followers_count": user.followers_count,
+            "following_count": user.following_count,
+        } for user in paginated_queryset]
 
-        return Response(data, status=status.HTTP_200_OK)
+        response = self.get_paginated_response(data)
 
+        # Cache the paginated response for 5 minutes
+        cache.set(cache_key, response.data, timeout=CACHE_TIMEOUT)
+        logger.info("Cache set: Cached all users' followers data.")
+
+        return response
     
 # -------------------- USER FEED --------------------
 class UserFeedView(generics.ListAPIView):
     """
-    Get posts from followed users, liked posts, and comments.
-    Includes filtering and ordering.
+    Shows the feed with DRF pagination and per-page caching:
+      - Public posts from followed users
+      - Public posts the user has liked or commented on
+      - The user’s own private posts
+    Cache is keyed by user + page to preserve pagination navigation.
     """
     serializer_class = PostSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -439,61 +796,135 @@ class UserFeedView(generics.ListAPIView):
         user = self.request.user
         followed_users = Follow.objects.filter(follower=user).values_list('following', flat=True)
 
-        # Get posts from followed users, liked posts, and commented posts
-        return Post.objects.filter(
-            Q(author_id__in=followed_users) | 
-            Q(likes__user=user) | 
-            Q(comments__author=user)
-        ).distinct().order_by('-created_at').prefetch_related(
-            Prefetch('comments'),
-            Prefetch('likes')
+        # Only show:
+        #  - public posts by followed users
+        #  - public posts liked by or commented on by the user
+        #  - the user's own posts (including private)
+        return (
+            Post.objects.filter(
+                Q(author__in=followed_users, privacy='public') |
+                Q(likes__user=user, privacy='public') |
+                Q(comments__author=user, privacy='public') |
+                Q(author=user)  # includes user's private
+            )
+            .distinct()
+            .order_by('-created_at')
         )
 
-# -------------------- PROFILE VIEW WITH UPLOAD --------------------
+    def list(self, request, *args, **kwargs):
+        user_id = request.user.id
+        page_number = request.query_params.get("page", 1)
+        cache_key = f"user_feed_page_{user_id}_{page_number}"
+
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            logger.info(f"[UserFeedView] Cache hit for user={user_id}, page={page_number}")
+            return Response(cached_data, status=status.HTTP_200_OK)
+
+        logger.info(f"[UserFeedView] Cache miss for user={user_id}, page={page_number}")
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            paginated_response = self.get_paginated_response(serializer.data)
+            cache.set(cache_key, paginated_response.data, CACHE_TIMEOUT)
+            return paginated_response
+
+        # If not enough posts to paginate, just cache minimal
+        serializer = self.get_serializer(queryset, many=True)
+        minimal_data = serializer.data
+        cache.set(cache_key, minimal_data, CACHE_TIMEOUT)
+        return Response(minimal_data, status=status.HTTP_200_OK)
+
+    def clear_all_feed_page_caches(self):
+        """
+        Call this to invalidate ALL feed caches for ALL users and pages.
+        Example usage in Post creation/update/deletion:
+            UserFeedView().clear_all_feed_page_caches()
+        """
+        logger.info("[UserFeedView] Clearing ALL feed page caches for every user.")
+        for user in User.objects.all():
+            user_id = user.id
+            page = 1
+            while True:
+                cache_key = f"user_feed_page_{user_id}_{page}"
+                if cache.get(cache_key):
+                    cache.delete(cache_key)
+                    logger.info(f"Cleared feed cache: {cache_key}")
+                else:
+                    break
+                page += 1
+
+# -------------------- PROFILE VIEW --------------------
 class UserProfileView(generics.RetrieveAPIView):
     """
-    Retrieves logged-in user details, posts, and comments.
-    Ensures pagination applies automatically.
+    Retrieves the logged-in user's details.
+    - Paginates only the user's posts
+    - Comments are included without pagination
+    - No caching so that it always reflects real-time changes
     """
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    pagination_class = FeedPagination
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    ordering_fields = ['title', 'content', 'created_at']
+    permission_classes = [permissions.IsAuthenticated]  # <--- Enforce authentication
+    pagination_class = None  # or your custom pagination if you want paginated posts
+                             # but typically you only paginate the posts portion
 
     def get_queryset(self):
+        # Always use the actual User model, not request.user.__class__
+        User = get_user_model()
         return User.objects.filter(id=self.request.user.id)
 
     def get(self, request, *args, **kwargs):
-        user = self.get_queryset().first()
-
-        if not user:
+        logger.info(f"Fetching profile for user {request.user.id} with pagination (if enabled).")
+        
+        # 1. Get the user object
+        user_qs = self.get_queryset()
+        if not user_qs.exists():
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        user = user_qs.first()
 
-        # 🔹 Apply pagination to posts
-        posts = Post.objects.filter(author=user).order_by('-created_at')
-        paginated_posts = self.paginate_queryset(posts)
+        # 2. (Optional) Paginate the user's posts if you want
+        posts_qs = Post.objects.filter(author=user).order_by('-created_at')
+        # If you do want pagination on the posts, do something like:
+        page = self.paginate_queryset(posts_qs)
+        if page is not None:
+            serialized_posts = PostSerializer(page, many=True).data
+        else:
+            serialized_posts = PostSerializer(posts_qs, many=True).data
 
-        # 🔹 Apply pagination to comments
-        comments = Comment.objects.filter(author=user).order_by('-created_at')
-        paginated_comments = self.paginate_queryset(comments)
+        # 3. Get user comments (unpaginated or paginated—your choice)
+        comments_qs = Comment.objects.filter(author=user).order_by('-created_at')
+        serialized_comments = CommentSerializer(comments_qs, many=True).data
 
-        # 🔹 Generate paginated response
-        response_data = {
+        # 4. Construct the final profile data
+        profile_data = {
             "id": user.id,
             "username": user.username,
             "email": user.email,
-            "profile_photo": user.profile_photo if hasattr(user, 'profile_photo') else None,
+            "profile_photo": getattr(user, 'profile_photo', None),
             "followers_count": user.followers.count(),
             "following_count": user.following.count(),
-            "posts": PostSerializer(paginated_posts, many=True).data,
-            "comments": CommentSerializer(paginated_comments, many=True).data,
+            "posts": serialized_posts,       # possibly paginated
+            "comments": serialized_comments  # unpaginated
         }
 
-        return self.get_paginated_response(response_data)
+        # 5. If pagination is on for posts, DRF will create pagination links for the "posts" portion
+        #    and you can embed them in the final response. Or you can just return the default DRF
+        #    paginated response, but that typically expects a single "results" list.
+        if page is not None:
+            # If you want a single unified response with the pagination metadata, do:
+            return self.get_paginated_response(profile_data)
+        else:
+            # If no pagination was applied, just return the data
+            return Response(profile_data, status=status.HTTP_200_OK)
 
-
+# -------------------- UPLOAD PHOTO VIEW --------------------
 class UploadPhotoView(generics.CreateAPIView):
+    """
+    Allows users to upload a profile photo.
+    Implements caching to avoid redundant uploads.
+    Logs cache behavior for debugging.
+    """
     serializer_class = UploadPhotoSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -502,14 +933,24 @@ class UploadPhotoView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             uploaded_photo = serializer.validated_data['photo']
-            
-            # Get new Google Drive URL
+
+            # Upload photo to Google Drive
             drive_url = upload_to_google_drive(uploaded_photo, request.user.username)
 
-            # Update the user's profile photo URL
+            # Update user's profile photo URL
             request.user.profile_photo = drive_url
             request.user.save()
 
-            return Response({"message": "Profile photo updated", "drive_url": drive_url}, status=status.HTTP_201_CREATED)
+            # Invalidate and set new cache only after successful upload
+            cache_key = f"profile_photo_{request.user.id}"
+            cache.delete(cache_key)  # Invalidate old cache
+            cache.set(cache_key, drive_url, timeout=600)  # Store new cache
+            logger.info(f"Cache updated: Profile photo for user {request.user.id}.")
 
+            return Response({
+                "message": "Profile photo updated",
+                "drive_url": drive_url
+            }, status=status.HTTP_201_CREATED)
+
+        logger.error(f"Photo upload failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
