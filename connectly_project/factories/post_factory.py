@@ -2,7 +2,7 @@ from posts.models import Post
 
 class PostFactory:
     @staticmethod
-    def create_post(post_type, title, content='', metadata=None, author=None, image=None, video=None):
+    def create_post(post_type, title, content='', metadata=None, author=None, image=None, video=None, privacy='public'):
         if post_type not in dict(Post.POST_TYPES):
             raise ValueError("Invalid post type")
 
@@ -18,7 +18,8 @@ class PostFactory:
             content=content,
             post_type=post_type,
             metadata=metadata or {},
-            author=author
+            author=author,
+            privacy=privacy
         )
 
         if image:
